@@ -1,20 +1,12 @@
-// api/leaderboard.js — global leaderboard for Defenders
-// Works with ANY Postgres: local (postgres://user:pass@localhost:5432/defenders),
-// Supabase, Neon, whatever. Set DATABASE_URL to the connection string.
-//
+// api/leaderboard.js — global leaderboard for Defenders (Neon)
 // GET  -> top 10 scores
 // POST -> { name: "ABC", score: 123.4 } -> saves + returns updated top 10
+//
+// Requires DATABASE_URL env var in Vercel = your Neon connection string.
 
-import pg from 'pg';
+import { neon } from '@neondatabase/serverless';
 
-const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
-  max: 3,                          // serverless: keep the pool tiny
-  // Hosted Postgres (Supabase/Neon) requires SSL; local usually doesn't.
-  ssl: process.env.DATABASE_URL?.includes('localhost')
-    ? false
-    : { rejectUnauthorized: false },
-});
+const sql = neon(process.env.DATABASE_URL);
 
 const MAX_SCORE = 7200; // 2 hours — nobody legitimately holds longer
 const NAME_RE = /^[A-Z0-9]{1,3}$/;
@@ -32,11 +24,11 @@ function rateLimited(ip) {
 }
 
 async function topTen() {
-  const { rows } = await pool.query(
-    `SELECT name, score FROM scores
-     ORDER BY score DESC, created_at ASC
-     LIMIT 10`
-  );
+  const rows = await sql`
+    SELECT name, score FROM scores
+    ORDER BY score DESC, created_at ASC
+    LIMIT 10
+  `;
   return rows.map(r => ({ name: r.name, score: Number(r.score) }));
 }
 
@@ -64,10 +56,10 @@ export default async function handler(req, res) {
         return res.status(400).json({ error: 'Invalid score.' });
       }
 
-      await pool.query(
-        'INSERT INTO scores (name, score) VALUES ($1, $2)',
-        [cleanName, Math.round(numScore * 10) / 10]
-      );
+      await sql`
+        INSERT INTO scores (name, score)
+        VALUES (${cleanName}, ${Math.round(numScore * 10) / 10})
+      `;
       return res.status(200).json(await topTen());
     }
 
