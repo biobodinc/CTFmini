@@ -60,7 +60,10 @@ export default async function handler(req, res) {
         INSERT INTO scores (name, score)
         VALUES (${cleanName}, ${Math.round(numScore * 10) / 10})
       `;
-      return res.status(200).json(await topTen());
+      const [{ rank }] = await sql`
+        SELECT COUNT(*) + 1 AS rank FROM scores WHERE score > ${numScore}
+      `;
+      return res.status(200).json({ board: await topTen(), rank: Number(rank) });
     }
 
     res.setHeader('Allow', 'GET, POST');

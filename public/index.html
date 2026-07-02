@@ -189,6 +189,21 @@
   .board-row.top1 { border-color: var(--gold); background: rgba(255,194,51,0.1); }
   .board-empty { color: var(--ink-dim); font-size: 13px; padding: 12px; }
 
+  .notice {
+    font-size: 12px; letter-spacing: 0.06em;
+    color: var(--ink-dim);
+    background: rgba(255,194,51,0.08);
+    border: 1px solid rgba(255,194,51,0.35);
+    border-radius: 999px;
+    padding: 8px 18px;
+  }
+  .notice b { color: var(--gold); }
+
+  .profile { width: min(360px, 84vw); display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+  .profile .opt-label { text-align: left; font-size: 11px; }
+  .profile-row { border-color: rgba(90,209,255,0.45); background: rgba(90,209,255,0.07); }
+  .profile-row .rank-lbl { color: var(--cyan); font-weight: 700; font-size: 13px; }
+
   /* ---------- Initials entry ---------- */
   #initialsWrap { display: flex; gap: 10px; align-items: center; }
   #initialsInput {
@@ -298,6 +313,14 @@
 <div id="leaderboard" class="overlay hidden">
   <div class="screen-title">ENDLESS RUNS</div>
   <div class="board" id="boardList"></div>
+  <div id="profileArea" class="profile" hidden>
+    <span class="opt-label">Your last run</span>
+    <div class="board-row profile-row">
+      <span class="name" id="profName">—</span>
+      <span class="rank-lbl" id="profRank">—</span>
+      <span class="score" id="profScore">—</span>
+    </div>
+  </div>
   <button class="btn ghost backBtn">Back</button>
 </div>
 
@@ -305,6 +328,7 @@
 <div id="endScreen" class="overlay hidden">
   <div id="endTitle" class="result-title win">VICTORY</div>
   <p id="endStat" class="stat-line"></p>
+  <p id="modeNotice" class="notice" hidden>Leaderboard runs are <b>Endless only</b> — Classic scores don't submit</p>
   <div id="initialsWrap" hidden>
     <input id="initialsInput" maxlength="3" placeholder="AAA" autocomplete="off" spellcheck="false">
     <button id="saveScoreBtn" class="btn" style="min-width:0; padding:12px 22px; font-size:14px;">Save</button>
@@ -655,6 +679,7 @@ async function addScore(name, score) {
     name: (name || 'AAA').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3) || 'AAA',
     score: Math.round(score * 10) / 10,
   };
+  let rank = null;
   try {
     const r = await fetch(API, {
       method: 'POST',
@@ -662,8 +687,11 @@ async function addScore(name, score) {
       body: JSON.stringify(entry),
     });
     if (r.ok) {
-      boardCache = await r.json();
+      const data = await r.json();
+      if (Array.isArray(data)) boardCache = data;          // older API shape
+      else { boardCache = data.board; rank = data.rank; }  // { board, rank }
       store.set(BOARD_KEY, boardCache);
+      store.set('defenders_lastRun', { ...entry, rank, ts: Date.now() });
       return;
     }
   } catch { /* fall through to local */ }
@@ -671,6 +699,8 @@ async function addScore(name, score) {
   boardCache.sort((a, c) => c.score - a.score);
   boardCache = boardCache.slice(0, 10);
   store.set(BOARD_KEY, boardCache);
+  const localIdx = boardCache.findIndex(r => r.name === entry.name && r.score === entry.score);
+  store.set('defenders_lastRun', { ...entry, rank: localIdx >= 0 ? localIdx + 1 : null, ts: Date.now() });
 }
 fetchBoard(); // warm the cache on load
 function renderBoard(el) {
@@ -732,6 +762,7 @@ const endStat = document.getElementById('endStat');
 const initialsWrap = document.getElementById('initialsWrap');
 const initialsInput = document.getElementById('initialsInput');
 const endBoard = document.getElementById('endBoard');
+const modeNotice = document.getElementById('modeNotice');
 
 /* --- options wiring --- */
 function wireSeg(id, current, apply) {
@@ -749,9 +780,20 @@ wireSeg('segSound', OPTS.sound ? 'on' : 'off', v => { OPTS.sound = v === 'on'; }
 wireSeg('segShake', OPTS.shake ? 'on' : 'off', v => { OPTS.shake = v === 'on'; });
 
 document.getElementById('optionsBtn').addEventListener('click', () => showScreen('options'));
+function renderProfile() {
+  const area = document.getElementById('profileArea');
+  const run = store.get('defenders_lastRun', null);
+  if (!run) { area.hidden = true; return; }
+  document.getElementById('profName').textContent = run.name;
+  document.getElementById('profScore').textContent = run.score.toFixed(1) + 's';
+  document.getElementById('profRank').textContent = run.rank ? '#' + run.rank : 'unranked';
+  area.hidden = false;
+}
+
 document.getElementById('boardBtn').addEventListener('click', async () => {
   const list = document.getElementById('boardList');
   renderBoard(list);                 // instant from cache
+  renderProfile();
   showScreen('leaderboard');
   await fetchBoard();
   renderBoard(list);                 // refreshed from server
@@ -800,12 +842,16 @@ function endGame(won) {
   endBoard.hidden = true;
 
   if (S.gameMode === 'classic') {
+    initialsWrap.hidden = true;   // classic never submits scores
+    endBoard.hidden = true;
+    modeNotice.hidden = false;    // "leaderboard is Endless only"
     endTitle.textContent = won ? 'FLAG SECURED' : 'FLAG LOST';
     endTitle.className = 'result-title ' + (won ? 'win' : 'lose');
     endStat.innerHTML = won
-      ? `Held the full minute in <b>${S.elapsed.toFixed(1)}s</b> · tagged <b>${S.hitsTaken}</b> time${S.hitsTaken === 1 ? '' : 's'}`
+      ? `Secured in <b>${S.elapsed.toFixed(1)}s</b> real time · tagged <b>${S.hitsTaken}</b> time${S.hitsTaken === 1 ? '' : 's'}`
       : `You held the flag for <b>${p.held.toFixed(1)}s</b> of 60 before the raiders got you`;
   } else {
+    modeNotice.hidden = true;
     const isBest = lastScore > bestScore();
     endTitle.textContent = isBest ? 'NEW RECORD' : 'RUN OVER';
     endTitle.className = 'result-title ' + (isBest ? 'win' : 'lose');
@@ -828,6 +874,7 @@ document.getElementById('endlessBtn').addEventListener('click', () => startGame(
 document.getElementById('retryBtn').addEventListener('click', () => startGame(S.gameMode));
 document.getElementById('menuBtn').addEventListener('click', () => showScreen('menu'));
 document.getElementById('saveScoreBtn').addEventListener('click', async () => {
+  if (S.gameMode !== 'endless') { initialsWrap.hidden = true; return; } // endless-only
   const btn = document.getElementById('saveScoreBtn');
   btn.disabled = true;
   await addScore(initialsInput.value, lastScore);
